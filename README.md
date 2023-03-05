@@ -1,4 +1,4 @@
-# HOW-OneLiner
+# How-OneLiner
 
 ## What is this?
 
