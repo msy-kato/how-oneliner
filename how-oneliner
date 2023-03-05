@@ -1,0 +1,120 @@
+#!/bin/bash
+set -e
+
+LOG_DIR="/tmp/how-oneliner"
+LOG_FILE="${LOG_DIR}/response-$(date '+%Y%m%d').log"
+
+show_help() {
+    echo "Usage: how-oneliner << What you want to do in Any language. >>"
+    echo ""
+    echo "Options:"
+    echo "  -h: Show this help message"
+    echo ""
+    echo "Outputs:"
+    echo "  Outputs up to 3 command candidates."
+    echo ""
+    echo "Requirement:"
+    echo "  Set the OpenAPI secret key in the environment variable(OAI_API_KEY)."
+    echo "  ex) export OAI_API_KEY=xxxxxxx"
+}
+
+while getopts ":h" opt; do
+    case ${opt} in
+        h )
+            show_help
+            exit 0
+            ;;
+        \? )
+            echo "Error: nvalid option: -$OPTARG" 1>&2
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+function check-and-init() {
+    INPUT="$1"
+
+    if [ -z "${OAI_API_KEY}" ]; then
+	echo "Error: OAI_API_KEY is not set."
+	exit 1
+    fi
+
+    if [ -z "${INPUT}" ]; then
+	echo "Error: No input instruction."
+	exit 1
+    fi
+
+    mkdir -p ${LOG_DIR}
+}
+
+function translate() {
+    INST_JP="$@"
+    TRANSLATION_QUERY="If the following sentences are not in English, translate them into English. If it is already in English, output it as is.\n\n${INST_JP}"
+
+    INST_EN=$(curl https://api.openai.com/v1/chat/completions \
+		   -s \
+		   -H "Content-Type: application/json" \
+		   -H "Authorization: Bearer ${OAI_API_KEY}" \
+		   -d \
+		   "{
+		       \"model\": \"gpt-3.5-turbo\",
+    		       \"messages\": [
+        	         {\"role\": \"system\", \"content\": \"You are the language translation assistant.\"},
+        	         {\"role\": \"user\", \"content\": \"${TRANSLATION_QUERY}\"}
+    		       ],
+    		       \"temperature\": 0.0,
+    		       \"n\": 1,
+    		       \"max_tokens\": 1024
+		    }" | tee -a ${LOG_FILE} | awk -F\" -v RS=, '/"content"/{print $4}')
+
+    if [ -z "${INST_EN}" ]; then
+	echo "Translation of the instruction failed."
+	echo "See ${LOG_FILE} for reason."
+	exit 1
+    fi
+}
+
+function generate() {
+    GENERATE_QUERY="Generate a command that executes the following instructions.\n\
+${INST_EN}\n\
+However, the output should satisfy the following,\n\
+- Generate commands that must be executable with one-liner.\n\
+- Always generate commands that can be executed on Linux OS bash.\n\
+- If a suitable command cannot be found, print None.\n\
+- Do not output any results other than the command. No additional explanations or annotations are required.\n\
+- Precede each command with a $.\n"
+
+    COMMAND=$(curl https://api.openai.com/v1/chat/completions \
+		   -s \
+		   -H "Content-Type: application/json" \
+		   -H "Authorization: Bearer ${OAI_API_KEY}" \
+		   -d \
+                   "{
+                     \"model\": \"gpt-3.5-turbo\",
+                     \"messages\": [
+                       {\"role\": \"system\", \"content\": \"You are an assistant that generates commands that run on the Linux OS from the input of user requests.\"},
+                       {\"role\": \"user\", \"content\": \"${GENERATE_QUERY}\"}
+                     ],
+    		     \"temperature\": 0.3,
+                     \"n\": 3,
+                     \"max_tokens\": 2048
+                   }" | tee -a ${LOG_FILE} | sed 's/"content":"/\n/g' |  sed 's/"},"finish_reason"/\n/g' | grep '^\$' | sort | uniq)
+
+    if [ -z "${COMMAND}" ]; then
+	echo "Command generation failed."
+	echo "See ${LOG_FILE} for reason."
+	exit 1
+    fi
+
+    echo "${COMMAND}"
+}
+
+
+### main
+check-and-init "$@"
+translate "$@"
+sleep 3
+generate
+
+exit 0
