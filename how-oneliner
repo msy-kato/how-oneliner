@@ -1,11 +1,19 @@
 #!/bin/bash
 set -e
 
+# Parameters
+MODEL="gpt-3.5-turbo"
+TRANSLATION_MAX_TOKEN=1024
+GENERATION_MAX_TOKEN=2048
+GENERATION_TEMPERATURE=0.3
+GENERATION_N=3
+
 LOG_DIR="/tmp/how-oneliner"
 LOG_FILE="${LOG_DIR}/response-$(date '+%Y%m%d').log"
 
 show_help() {
-    echo "Usage: how-oneliner << What you want to do in Any language. >>"
+    echo "Usage:"
+    echo "  $ how-oneliner \"What you want to do in Any language\"."
     echo ""
     echo "Options:"
     echo "  -h: Show this help message"
@@ -14,8 +22,8 @@ show_help() {
     echo "  Outputs up to 3 command candidates."
     echo ""
     echo "Requirement:"
-    echo "  Set the OpenAPI secret key in the environment variable(OAI_API_KEY)."
-    echo "  ex) export OAI_API_KEY=xxxxxxx"
+    echo "  Set the OpenAPI secret key in the environment variable OAI_API_KEY."
+    echo "  $ export OAI_API_KEY=xxxxxxx"
 }
 
 while getopts ":h" opt; do
@@ -51,22 +59,27 @@ function check-and-init() {
 function translate() {
     INST_JP="$@"
     TRANSLATION_QUERY="If the following sentences are not in English, translate them into English. If it is already in English, output it as is.\n\n${INST_JP}"
-
+    INPUT_JSON=$(cat << EOT
+{
+  "model": "${MODEL}",
+  "messages": [
+    {"role": "system", "content": "You are the language translation assistant."},
+    {"role": "user", "content": "${TRANSLATION_QUERY}"}
+  ],
+  "temperature": 0,
+  "n": 1,
+  "max_tokens": ${TRANSLATION_MAX_TOKEN}
+}
+EOT
+    )
+    echo ${INPUT_JSON} >> ${LOG_FILE}
     INST_EN=$(curl https://api.openai.com/v1/chat/completions \
 		   -s \
 		   -H "Content-Type: application/json" \
 		   -H "Authorization: Bearer ${OAI_API_KEY}" \
-		   -d \
-		   "{
-		       \"model\": \"gpt-3.5-turbo\",
-    		       \"messages\": [
-        	         {\"role\": \"system\", \"content\": \"You are the language translation assistant.\"},
-        	         {\"role\": \"user\", \"content\": \"${TRANSLATION_QUERY}\"}
-    		       ],
-    		       \"temperature\": 0.0,
-    		       \"n\": 1,
-    		       \"max_tokens\": 1024
-		    }" | tee -a ${LOG_FILE} | awk -F\" -v RS=, '/"content"/{print $4}')
+		   -d "${INPUT_JSON}" \
+		  | tee -a ${LOG_FILE} \
+		  | awk -F\" -v RS=, '/"content"/{print $4}')
 
     if [ -z "${INST_EN}" ]; then
 	echo "Translation of the instruction failed."
@@ -77,29 +90,40 @@ function translate() {
 
 function generate() {
     GENERATE_QUERY="Generate a command that executes the following instructions.\n\
-${INST_EN}\n\
-However, the output should satisfy the following,\n\
-- Generate commands that must be executable with one-liner.\n\
-- Always generate commands that can be executed on Linux OS bash.\n\
+${INST_EN}\n\n\
+The output should satisfy the following,\n\
+- Generate the one line command that must be executable on Linux OS.\n\
+- Combine the commands that come standard with Linux whenever possible.\n\
 - If a suitable command cannot be found, print None.\n\
-- Do not output any results other than the command. No additional explanations or annotations are required.\n\
-- Precede each command with a $.\n"
+- Output should only show commands and start with \$.\n"
 
+    INPUT_JSON=$(cat << EOT
+{
+  "model": "${MODEL}",
+  "messages": [
+    {"role": "system", "content": "You are an assistant that generates commands that run on the Linux OS from the input of user requests."},
+    {"role": "user", "content": "${GENERATE_QUERY}"}
+  ],
+  "temperature": ${GENERATION_TEMPERATURE},
+  "n": ${GENERATION_N},
+  "max_tokens": ${GENERATION_MAX_TOKEN}
+}
+EOT
+    )
+    echo ${INPUT_JSON} >> ${LOG_FILE}
     COMMAND=$(curl https://api.openai.com/v1/chat/completions \
 		   -s \
 		   -H "Content-Type: application/json" \
 		   -H "Authorization: Bearer ${OAI_API_KEY}" \
-		   -d \
-                   "{
-                     \"model\": \"gpt-3.5-turbo\",
-                     \"messages\": [
-                       {\"role\": \"system\", \"content\": \"You are an assistant that generates commands that run on the Linux OS from the input of user requests.\"},
-                       {\"role\": \"user\", \"content\": \"${GENERATE_QUERY}\"}
-                     ],
-    		     \"temperature\": 0.3,
-                     \"n\": 3,
-                     \"max_tokens\": 2048
-                   }" | tee -a ${LOG_FILE} | sed 's/"content":"/\n/g' |  sed 's/"},"finish_reason"/\n/g' | grep '^\$' | sort | uniq)
+		   -d "${INPUT_JSON}" \
+		  | tee -a ${LOG_FILE} \
+		  | sed 's/"content":"/\n/g' \
+		  | sed 's/"},"finish_reason"/\n/g' \
+		  | sed 's/```\\n\$/\n$/g' \
+		  | sed 's/\\n```/\n/g' \
+		  | grep '^\$' \
+		  | sort \
+		  | uniq)
 
     if [ -z "${COMMAND}" ]; then
 	echo "Command generation failed."
