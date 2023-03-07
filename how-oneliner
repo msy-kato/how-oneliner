@@ -96,7 +96,7 @@ EOT
 	echo "See ${LOG_FILE} for reason."
 	exit 1
     fi
-    echo ${INST_EN}
+    # echo ${INST_EN}
 }
 
 function generate() {
