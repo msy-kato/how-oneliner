@@ -87,6 +87,8 @@ EOT
 		  | tee -a ${LOG_FILE} \
 		  | awk -F\" -v RS=, '/"content"/{print $4}' \
 	          | grep '###' \
+		  | sed 's/Output: //g' \
+		  | sed 's/output: //g' \
 		  | sed 's/###//g')
 
     if [ -z "${INST_EN}" ]; then
