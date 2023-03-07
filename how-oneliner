@@ -4,7 +4,7 @@ set -e
 # Parameters
 MODEL="gpt-3.5-turbo"
 TRANSLATION_MAX_TOKEN=1024
-GENERATION_MAX_TOKEN=2048
+GENERATION_MAX_TOKEN=1024
 GENERATION_TEMPERATURE=0.3
 GENERATION_N=3
 
@@ -57,14 +57,20 @@ function check-and-init() {
 }
 
 function translate() {
-    INST_JP="$@"
-    TRANSLATION_QUERY="If the following sentences are not in English, translate them into English. If it is already in English, output it as is.\n\n${INST_JP}"
+    INST="$@"
+    SYSTEM_MESSAGE="You are a translator that translates any language into English."
+    QUERY="Output sentence according to the following rules.\n\
+1. If the input is not in English, translate it into English. If the input is in English, proofread and output it.\n\
+2. Put '###' at the beginning of the result of 1."
+    ANSWER="OK. Please input a sentence."
     INPUT_JSON=$(cat << EOT
 {
   "model": "${MODEL}",
   "messages": [
-    {"role": "system", "content": "You are the language translation assistant."},
-    {"role": "user", "content": "${TRANSLATION_QUERY}"}
+    {"role": "system",    "content": "${SYSTEM_MESSAGE}"},
+    {"role": "user",      "content": "${QUERY}"},
+    {"role": "assistant", "content": "${ANSWER}"},
+    {"role": "user",      "content": "${INST}"}
   ],
   "temperature": 0,
   "n": 1,
@@ -79,30 +85,34 @@ EOT
 		   -H "Authorization: Bearer ${OAI_API_KEY}" \
 		   -d "${INPUT_JSON}" \
 		  | tee -a ${LOG_FILE} \
-		  | awk -F\" -v RS=, '/"content"/{print $4}')
+		  | awk -F\" -v RS=, '/"content"/{print $4}' \
+	          | grep '###' \
+		  | sed 's/###//g')
 
     if [ -z "${INST_EN}" ]; then
 	echo "Translation of the instruction failed."
 	echo "See ${LOG_FILE} for reason."
 	exit 1
     fi
+    echo ${INST_EN}
 }
 
 function generate() {
-    GENERATE_QUERY="Generate a command that executes the following instructions.\n\
-${INST_EN}\n\n\
-The output should satisfy the following,\n\
-- Generate the one line command that must be executable on Linux OS.\n\
+    SYSTEM_MESSAGE="You are an assistant that generates commands that run on Linux bash shell."
+    QUERY="Generate a command to execute the request according to the following rules\n\
+- One line.\n\
+- Executable on Linux bash.\n\
 - Combine the commands that come standard with Linux whenever possible.\n\
-- If a suitable command cannot be found, print None.\n\
-- Output should only show commands and start with \$.\n"
-
+- Start with \$.\n"
+    ANSWER="OK. What do you want to do?"
     INPUT_JSON=$(cat << EOT
 {
   "model": "${MODEL}",
   "messages": [
-    {"role": "system", "content": "You are an assistant that generates commands that run on the Linux OS from the input of user requests."},
-    {"role": "user", "content": "${GENERATE_QUERY}"}
+    {"role": "system",    "content": "${SYSTEM_MESSAGE}"},
+    {"role": "user",      "content": "${QUERY}"},
+    {"role": "assistant", "content": "${ANSWER}"},
+    {"role": "user",      "content": "${INST_EN}"}
   ],
   "temperature": ${GENERATION_TEMPERATURE},
   "n": ${GENERATION_N},
@@ -131,14 +141,13 @@ EOT
 	exit 1
     fi
 
-    echo "${COMMAND}"
+    echo "${COMMAND}" | sed 's/\\"/"/g'
 }
 
 
 ### main
 check-and-init "$@"
 translate "$@"
-sleep 3
 generate
 
 exit 0

@@ -6,7 +6,7 @@ Generate a one-liner command for what you would like to do with ChatGPT.
 
 ## Requirements
 
-- OpenAI API Key. Get from [here](https://platform.openai.com/signup/)
+- Get OpenAI API Key from [here](https://platform.openai.com/signup/).
 - `curl` command
 
 ## How this work?
